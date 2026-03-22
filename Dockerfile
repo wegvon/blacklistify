@@ -27,6 +27,10 @@ RUN apk add --no-cache \
     libpq-dev \
     redis
 
+# Force IPv4 DNS resolution (Supabase db.* only has AAAA records,
+# but Docker containers often lack IPv6 connectivity)
+RUN echo "precedence ::ffff:0:0/96 100" > /etc/gai.conf
+
 # Python deps
 COPY packages/backend/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
