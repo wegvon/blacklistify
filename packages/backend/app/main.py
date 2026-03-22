@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
@@ -19,10 +20,27 @@ from app.core.config import settings
 from app.db.init_data import seed_default_admin
 from app.db.session import Base, SessionLocal, engine
 
+logger = logging.getLogger(__name__)
+
+# Tables managed by create_all (legacy, no schema prefix)
+LEGACY_TABLES = {"users", "hostnames", "check_histories", "blacklisted_hostnames"}
+
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    Base.metadata.create_all(bind=engine)
+    # Only auto-create legacy tables (public schema).
+    # blacklistify.* tables are managed by Alembic migrations.
+    legacy_tables = [
+        t for t in Base.metadata.sorted_tables
+        if t.name in LEGACY_TABLES and t.schema is None
+    ]
+    Base.metadata.create_all(bind=engine, tables=legacy_tables)
+
+    # Run Alembic migrations for blacklistify schema
+    try:
+        _run_alembic_upgrade()
+    except Exception as e:
+        logger.warning("Alembic migration skipped: %s", e)
 
     db = SessionLocal()
     try:
@@ -31,6 +49,28 @@ async def lifespan(_: FastAPI):
         db.close()
 
     yield
+
+
+def _run_alembic_upgrade():
+    """Run alembic upgrade head on startup."""
+    import os
+    from alembic.config import Config
+    from alembic import command
+
+    alembic_cfg = Config()
+    # Find alembic.ini relative to app directory
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    ini_path = os.path.join(base_dir, "alembic.ini")
+
+    if not os.path.exists(ini_path):
+        logger.warning("alembic.ini not found at %s, skipping migrations", ini_path)
+        return
+
+    alembic_cfg.set_main_option("script_location", os.path.join(base_dir, "alembic"))
+    alembic_cfg.set_main_option("sqlalchemy.url", settings.database_url)
+
+    command.upgrade(alembic_cfg, "head")
+    logger.info("Alembic migrations applied successfully")
 
 
 def create_app() -> FastAPI:
