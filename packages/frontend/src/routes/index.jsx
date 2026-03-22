@@ -27,7 +27,7 @@ const Routes = () => {
   const routesForPublic = [
     {
       path: '/',
-      element: <Navigate to="https://subnetkirala.com" replace />,
+      element: <Navigate to="/login" replace />,
     },
     {
       path: 'quick-check',
