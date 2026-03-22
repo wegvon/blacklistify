@@ -27,7 +27,7 @@ const Routes = () => {
   const routesForPublic = [
     {
       path: '/',
-      element: <Navigate to="/login" replace />,
+      element: <Navigate to="/dashboard" replace />,
     },
     {
       path: 'quick-check',
