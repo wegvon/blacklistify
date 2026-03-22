@@ -3,6 +3,10 @@
 Revision ID: 001
 Revises:
 Create Date: 2026-03-23
+
+Real Ripefy DB structure:
+  ripe_accounts -> ip_prefixes (/22) -> ip_blocks (/24) -> ip_leases -> customers
+  77 prefixes, 308 blocks, ~78K IPs
 """
 from typing import Sequence, Union
 
@@ -17,7 +21,6 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # Create schema
     op.execute("CREATE SCHEMA IF NOT EXISTS blacklistify")
 
     # scan_jobs
@@ -37,13 +40,15 @@ def upgrade() -> None:
         schema="blacklistify",
     )
 
-    # scan_results
+    # scan_results — one row per IP per scan
     op.create_table(
         "scan_results",
         sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=True),
         sa.Column("scan_job_id", sa.BigInteger, sa.ForeignKey("blacklistify.scan_jobs.id", ondelete="CASCADE"), nullable=False),
-        sa.Column("subnet_id", sa.String(36), nullable=True),
-        sa.Column("subnet_cidr", sa.String(43), nullable=False),
+        sa.Column("block_id", sa.String(36), nullable=True),         # Ripefy ip_blocks.id (soft FK)
+        sa.Column("block_cidr", sa.String(43), nullable=False),       # e.g. "185.87.120.0/24"
+        sa.Column("prefix_id", sa.String(36), nullable=True),         # Ripefy ip_prefixes.id (soft FK)
+        sa.Column("prefix_cidr", sa.String(43), nullable=True),       # e.g. "185.87.120.0/22"
         sa.Column("ip_address", INET, nullable=False),
         sa.Column("is_blacklisted", sa.Boolean, server_default="false"),
         sa.Column("providers_detected", JSONB, server_default="'[]'"),
@@ -51,17 +56,22 @@ def upgrade() -> None:
         sa.Column("checked_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
         schema="blacklistify",
     )
-    op.create_index("idx_scan_results_subnet", "scan_results", ["subnet_cidr"], schema="blacklistify")
-    op.create_index("idx_scan_results_ip", "scan_results", ["ip_address"], schema="blacklistify")
-    op.create_index("idx_scan_results_blacklisted", "scan_results", ["is_blacklisted"], schema="blacklistify", postgresql_where=sa.text("is_blacklisted = TRUE"))
-    op.create_index("idx_scan_results_checked", "scan_results", [sa.text("checked_at DESC")], schema="blacklistify")
-    op.create_index("idx_scan_results_job", "scan_results", ["scan_job_id"], schema="blacklistify")
+    op.create_index("idx_sr_block_id", "scan_results", ["block_id"], schema="blacklistify")
+    op.create_index("idx_sr_block_cidr", "scan_results", ["block_cidr"], schema="blacklistify")
+    op.create_index("idx_sr_prefix_id", "scan_results", ["prefix_id"], schema="blacklistify")
+    op.create_index("idx_sr_ip", "scan_results", ["ip_address"], schema="blacklistify")
+    op.create_index("idx_sr_blacklisted", "scan_results", ["is_blacklisted"], schema="blacklistify", postgresql_where=sa.text("is_blacklisted = TRUE"))
+    op.create_index("idx_sr_checked", "scan_results", [sa.text("checked_at DESC")], schema="blacklistify")
+    op.create_index("idx_sr_job", "scan_results", ["scan_job_id"], schema="blacklistify")
 
-    # subnet_status
+    # block_status — aggregate cache per /24 block (maps to Ripefy ip_blocks)
     op.create_table(
-        "subnet_status",
-        sa.Column("subnet_id", sa.String(36), primary_key=True),
-        sa.Column("subnet_cidr", sa.String(43), nullable=False),
+        "block_status",
+        sa.Column("block_id", sa.String(36), primary_key=True),      # Ripefy ip_blocks.id
+        sa.Column("block_cidr", sa.String(43), nullable=False),
+        sa.Column("prefix_id", sa.String(36), nullable=True),
+        sa.Column("prefix_cidr", sa.String(43), nullable=True),
+        sa.Column("customer_name", sa.String(255), nullable=True),
         sa.Column("total_ips", sa.Integer, server_default="0"),
         sa.Column("blacklisted_ips", sa.Integer, server_default="0"),
         sa.Column("clean_ips", sa.Integer, server_default="0"),
@@ -74,6 +84,7 @@ def upgrade() -> None:
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
         schema="blacklistify",
     )
+    op.create_index("idx_bs_prefix", "block_status", ["prefix_id"], schema="blacklistify")
 
     # api_keys
     op.create_table(
@@ -124,7 +135,7 @@ def downgrade() -> None:
     op.drop_table("alert_rules", schema="blacklistify")
     op.drop_table("webhooks", schema="blacklistify")
     op.drop_table("api_keys", schema="blacklistify")
-    op.drop_table("subnet_status", schema="blacklistify")
+    op.drop_table("block_status", schema="blacklistify")
     op.drop_table("scan_results", schema="blacklistify")
     op.drop_table("scan_jobs", schema="blacklistify")
     op.execute("DROP SCHEMA IF EXISTS blacklistify CASCADE")

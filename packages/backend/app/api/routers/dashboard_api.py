@@ -1,14 +1,13 @@
 """Dashboard aggregate statistics endpoints."""
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, text
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.security import get_auth_context, require_scope, AuthContext
 from app.db.session import get_db
 from app.models.scan_job import ScanJob
-from app.models.scan_result import ScanResult
-from app.models.subnet_status import SubnetStatus
+from app.models.subnet_status import BlockStatus
 
 router = APIRouter(prefix="/api/v1/dashboard", tags=["dashboard"])
 
@@ -19,21 +18,20 @@ def get_dashboard_stats(
     db: Session = Depends(get_db),
 ):
     """Get overall dashboard statistics."""
-    statuses = db.query(SubnetStatus).all()
+    statuses = db.query(BlockStatus).all()
 
-    total_subnets = len(statuses)
+    total_blocks = len(statuses)
+    prefix_ids = set(s.prefix_id for s in statuses if s.prefix_id)
     total_ips = sum(s.total_ips for s in statuses)
     blacklisted = sum(s.blacklisted_ips for s in statuses)
     clean = total_ips - blacklisted
 
-    # Last scan
     last_job = db.query(ScanJob).filter_by(status="completed").order_by(ScanJob.completed_at.desc()).first()
-
-    # Running scans
     running = db.query(ScanJob).filter_by(status="running").count()
 
     return {
-        "total_subnets": total_subnets,
+        "total_prefixes": len(prefix_ids),
+        "total_blocks": total_blocks,
         "total_ips": total_ips,
         "blacklisted_ips": blacklisted,
         "clean_ips": clean,
@@ -49,32 +47,34 @@ def get_dashboard_stats(
     }
 
 
-@router.get("/worst-subnets")
-def get_worst_subnets(
+@router.get("/worst-blocks")
+def get_worst_blocks(
     limit: int = Query(10, le=50),
     auth: AuthContext = Depends(require_scope("read")),
     db: Session = Depends(get_db),
 ):
-    """Get subnets with the highest blacklist rates."""
-    subnets = (
-        db.query(SubnetStatus)
-        .filter(SubnetStatus.blacklisted_ips > 0)
-        .order_by(SubnetStatus.blacklist_rate.desc())
+    """Get /24 blocks with the highest blacklist rates."""
+    blocks = (
+        db.query(BlockStatus)
+        .filter(BlockStatus.blacklisted_ips > 0)
+        .order_by(BlockStatus.blacklist_rate.desc())
         .limit(limit)
         .all()
     )
 
     return [
         {
-            "subnet_id": s.subnet_id,
-            "subnet_cidr": s.subnet_cidr,
-            "total_ips": s.total_ips,
-            "blacklisted_ips": s.blacklisted_ips,
-            "blacklist_rate": float(s.blacklist_rate),
-            "worst_providers": s.worst_providers or [],
-            "last_scanned_at": s.last_scanned_at.isoformat() if s.last_scanned_at else None,
+            "block_id": b.block_id,
+            "block_cidr": b.block_cidr,
+            "prefix_cidr": b.prefix_cidr,
+            "customer_name": b.customer_name,
+            "total_ips": b.total_ips,
+            "blacklisted_ips": b.blacklisted_ips,
+            "blacklist_rate": float(b.blacklist_rate),
+            "worst_providers": b.worst_providers or [],
+            "last_scanned_at": b.last_scanned_at.isoformat() if b.last_scanned_at else None,
         }
-        for s in subnets
+        for b in blocks
     ]
 
 

@@ -1,4 +1,9 @@
-"""Subnet listing and status endpoints (reads from Ripefy Supabase + blacklistify schema)."""
+"""
+Subnet/block listing and status endpoints.
+Reads ip_prefixes and ip_blocks from Ripefy Supabase + block_status from blacklistify schema.
+"""
+
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
@@ -7,47 +12,80 @@ from app.core.security import get_auth_context, require_scope, AuthContext
 from app.db.session import get_db
 from app.db.supabase_read import subnet_reader
 from app.models.scan_result import ScanResult
-from app.models.subnet_status import SubnetStatus
-from app.schemas.subnet import SubnetResponse, SubnetStatusResponse, SubnetSummaryResponse
+from app.models.subnet_status import BlockStatus
+from app.schemas.subnet import BlockResponse, BlockStatusResponse, PrefixResponse, SummaryResponse
 
 router = APIRouter(prefix="/api/v1/subnets", tags=["subnets"])
 
 
-@router.get("/", response_model=list[SubnetResponse])
-def list_subnets(
+# ── Prefixes (/22) ──────────────────────────────────────────────────────
+
+@router.get("/prefixes", response_model=list[PrefixResponse])
+def list_prefixes(
     auth: AuthContext = Depends(require_scope("read")),
 ):
-    """List all active subnets from Ripefy."""
+    """List all /22 prefixes from Ripefy."""
     try:
-        subnets = subnet_reader.get_active_subnets()
+        prefixes = subnet_reader.get_all_prefixes()
     except Exception as e:
-        raise HTTPException(503, f"Failed to read subnets: {e}")
+        raise HTTPException(503, f"Failed to read from Ripefy: {e}")
 
     return [
-        SubnetResponse(
-            id=s.get("id", ""),
-            cidr=s.get("cidr", ""),
-            description=s.get("description"),
-            status=s.get("status", ""),
-            customer_id=s.get("customer_id"),
+        PrefixResponse(
+            id=p.get("id", ""),
+            ripe_account_id=p.get("ripe_account_id"),
+            cidr=p.get("cidr", ""),
+            is_test=p.get("is_test", False),
+            description=p.get("description"),
         )
-        for s in subnets
+        for p in prefixes
     ]
 
 
-@router.get("/summary", response_model=SubnetSummaryResponse)
-def get_subnets_summary(
+# ── Blocks (/24) ────────────────────────────────────────────────────────
+
+@router.get("/blocks", response_model=list[BlockResponse])
+def list_blocks(
+    status: str | None = Query(None, description="Filter by status: free, leased"),
+    auth: AuthContext = Depends(require_scope("read")),
+):
+    """List all /24 blocks from Ripefy."""
+    try:
+        blocks = subnet_reader.get_all_blocks(status=status)
+    except Exception as e:
+        raise HTTPException(503, f"Failed to read from Ripefy: {e}")
+
+    return [
+        BlockResponse(
+            id=b.get("id", ""),
+            prefix_id=b.get("prefix_id", ""),
+            cidr=b.get("cidr", ""),
+            status=b.get("status", ""),
+            current_lease_id=b.get("current_lease_id"),
+            notes=b.get("notes"),
+        )
+        for b in blocks
+    ]
+
+
+# ── Summary ─────────────────────────────────────────────────────────────
+
+@router.get("/summary", response_model=SummaryResponse)
+def get_summary(
     auth: AuthContext = Depends(require_scope("read")),
     db: Session = Depends(get_db),
 ):
-    """Aggregate blacklist status across all subnets."""
-    statuses = db.query(SubnetStatus).all()
+    """Aggregate blacklist status across all blocks."""
+    statuses = db.query(BlockStatus).all()
 
-    total_subnets = len(statuses)
+    total_blocks = len(statuses)
     total_ips = sum(s.total_ips for s in statuses)
     blacklisted = sum(s.blacklisted_ips for s in statuses)
     clean = sum(s.clean_ips for s in statuses)
     rate = round(blacklisted / total_ips, 4) if total_ips > 0 else 0.0
+
+    # Prefix count
+    prefix_ids = set(s.prefix_id for s in statuses if s.prefix_id)
 
     # Last scan info
     last_scan = None
@@ -66,8 +104,9 @@ def get_subnets_summary(
                 "duration_seconds": duration,
             }
 
-    return SubnetSummaryResponse(
-        total_subnets=total_subnets,
+    return SummaryResponse(
+        total_prefixes=len(prefix_ids),
+        total_blocks=total_blocks,
         total_ips=total_ips,
         blacklisted_ips=blacklisted,
         clean_ips=clean,
@@ -76,39 +115,25 @@ def get_subnets_summary(
     )
 
 
-@router.get("/{subnet_id}", response_model=SubnetResponse)
-def get_subnet(
-    subnet_id: str,
-    auth: AuthContext = Depends(require_scope("read")),
-):
-    """Get a single subnet by ID from Ripefy."""
-    subnet = subnet_reader.get_subnet_by_id(subnet_id)
-    if not subnet:
-        raise HTTPException(404, "Subnet not found")
+# ── Block status ────────────────────────────────────────────────────────
 
-    return SubnetResponse(
-        id=subnet.get("id", ""),
-        cidr=subnet.get("cidr", ""),
-        description=subnet.get("description"),
-        status=subnet.get("status", ""),
-        customer_id=subnet.get("customer_id"),
-    )
-
-
-@router.get("/{subnet_id}/status", response_model=SubnetStatusResponse)
-def get_subnet_status(
-    subnet_id: str,
+@router.get("/blocks/{block_id}/status", response_model=BlockStatusResponse)
+def get_block_status(
+    block_id: str,
     auth: AuthContext = Depends(require_scope("read")),
     db: Session = Depends(get_db),
 ):
-    """Get blacklist status for a specific subnet."""
-    status = db.query(SubnetStatus).filter_by(subnet_id=subnet_id).first()
+    """Get blacklist status for a specific /24 block."""
+    status = db.query(BlockStatus).filter_by(block_id=block_id).first()
     if not status:
-        raise HTTPException(404, "No scan data for this subnet yet")
+        raise HTTPException(404, "No scan data for this block yet")
 
-    return SubnetStatusResponse(
-        subnet_id=status.subnet_id,
-        subnet_cidr=status.subnet_cidr,
+    return BlockStatusResponse(
+        block_id=status.block_id,
+        block_cidr=status.block_cidr,
+        prefix_id=status.prefix_id,
+        prefix_cidr=status.prefix_cidr,
+        customer_name=status.customer_name,
         total_ips=status.total_ips,
         blacklisted_ips=status.blacklisted_ips,
         clean_ips=status.clean_ips,
@@ -118,16 +143,16 @@ def get_subnet_status(
     )
 
 
-@router.get("/{subnet_id}/results")
-def get_subnet_results(
-    subnet_id: str,
+@router.get("/blocks/{block_id}/results")
+def get_block_results(
+    block_id: str,
     blacklisted_only: bool = Query(False),
     limit: int = Query(100, le=500),
     auth: AuthContext = Depends(require_scope("read")),
     db: Session = Depends(get_db),
 ):
-    """Get scan results for a specific subnet."""
-    query = db.query(ScanResult).filter_by(subnet_id=subnet_id)
+    """Get scan results for a specific /24 block."""
+    query = db.query(ScanResult).filter_by(block_id=block_id)
 
     if blacklisted_only:
         query = query.filter_by(is_blacklisted=True)
@@ -147,23 +172,25 @@ def get_subnet_results(
     ]
 
 
-@router.post("/{subnet_id}/scan")
-def trigger_subnet_scan(
-    subnet_id: str,
+@router.post("/blocks/{block_id}/scan")
+def trigger_block_scan(
+    block_id: str,
     auth: AuthContext = Depends(require_scope("scan")),
     db: Session = Depends(get_db),
 ):
-    """Trigger a manual scan for a specific subnet."""
-    subnet = subnet_reader.get_subnet_by_id(subnet_id)
-    if not subnet:
-        raise HTTPException(404, "Subnet not found")
+    """Trigger a manual scan for a specific /24 block."""
+    block = subnet_reader.get_block_by_id(block_id)
+    if not block:
+        raise HTTPException(404, "Block not found in Ripefy")
+
+    # Get prefix info
+    prefix = subnet_reader.get_prefix_by_id(block.get("prefix_id", ""))
 
     from app.models.scan_job import ScanJob
     from app.services.subnet_expander import cidr_to_ips, split_into_batches
     from app.core.config import settings
-    from datetime import datetime, timezone
 
-    cidr = subnet.get("cidr", "")
+    cidr = block.get("cidr", "")
     ips = cidr_to_ips(cidr)
 
     job = ScanJob(
@@ -177,19 +204,26 @@ def trigger_subnet_scan(
     db.commit()
     db.refresh(job)
 
-    from app.tasks.scan_subnet import scan_ip_batch
+    block_meta = {
+        "block_id": block["id"],
+        "block_cidr": cidr,
+        "prefix_id": block.get("prefix_id", ""),
+        "prefix_cidr": prefix.get("cidr", "") if prefix else "",
+    }
+
+    from app.tasks.scan_subnet import scan_block_batch
     batches = split_into_batches(ips, settings.scan_batch_size)
     for batch in batches:
-        scan_ip_batch.delay(
+        scan_block_batch.delay(
             job_id=job.id,
-            subnet_id=subnet_id,
-            subnet_cidr=cidr,
             ips=batch,
+            blocks=[block_meta] * len(batch),
         )
 
     return {
         "job_id": job.id,
         "status": "running",
+        "block_cidr": cidr,
         "total_ips": len(ips),
         "batches": len(batches),
     }

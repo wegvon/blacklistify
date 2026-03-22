@@ -20,8 +20,12 @@ class ScanResult(Base):
         nullable=False,
         index=True,
     )
-    subnet_id: Mapped[str | None] = mapped_column(String(36), nullable=True)  # Ripefy UUID (soft FK)
-    subnet_cidr: Mapped[str] = mapped_column(String(43), nullable=False, index=True)
+    # Ripefy references (soft FKs — no hard FK to public schema)
+    block_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    block_cidr: Mapped[str] = mapped_column(String(43), nullable=False, index=True)  # e.g. "185.87.120.0/24"
+    prefix_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    prefix_cidr: Mapped[str | None] = mapped_column(String(43), nullable=True)  # e.g. "185.87.120.0/22"
+
     ip_address: Mapped[str] = mapped_column(INET, nullable=False, index=True)
     is_blacklisted: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     providers_detected: Mapped[dict | None] = mapped_column(JSONB, default=list)

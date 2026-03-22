@@ -13,7 +13,7 @@ import httpx
 from app.core.celery_app import celery
 from app.db.session import SessionLocal
 from app.models.alert_rule import AlertRule
-from app.models.subnet_status import SubnetStatus
+from app.models.subnet_status import BlockStatus
 from app.models.webhook import Webhook
 
 logger = logging.getLogger(__name__)
@@ -22,19 +22,17 @@ logger = logging.getLogger(__name__)
 @celery.task(name="app.tasks.notifications.check_and_send_alerts")
 def check_and_send_alerts(
     job_id: int,
-    subnet_id: str,
-    subnet_cidr: str,
+    block_id: str,
+    block_cidr: str,
     blacklisted_count: int,
 ):
     """Check alert rules and dispatch webhook notifications."""
     db = SessionLocal()
     try:
-        # Get active alert rules
         rules = db.query(AlertRule).filter_by(is_active=True).all()
 
         for rule in rules:
-            # Check subnet filter
-            if rule.subnet_filter and rule.subnet_filter != subnet_cidr:
+            if rule.subnet_filter and rule.subnet_filter != block_cidr:
                 continue
 
             should_fire = False
@@ -43,7 +41,7 @@ def check_and_send_alerts(
                 should_fire = True
 
             elif rule.condition_type == "blacklist_rate_above" and rule.threshold:
-                status = db.query(SubnetStatus).filter_by(subnet_id=subnet_id).first()
+                status = db.query(BlockStatus).filter_by(block_id=block_id).first()
                 if status and float(status.blacklist_rate) > float(rule.threshold):
                     should_fire = True
 
@@ -54,8 +52,8 @@ def check_and_send_alerts(
                         webhook_id=webhook.id,
                         event="blacklist.detected",
                         data={
-                            "subnet_id": subnet_id,
-                            "subnet_cidr": subnet_cidr,
+                            "block_id": block_id,
+                            "block_cidr": block_cidr,
                             "blacklisted_count": blacklisted_count,
                             "scan_job_id": job_id,
                             "alert_rule": rule.name,
@@ -89,7 +87,6 @@ def deliver_webhook(self, webhook_id: int, event: str, data: dict):
         }
         body = json.dumps(payload, separators=(",", ":"))
 
-        # HMAC-SHA256 signature
         signature = hmac.new(
             webhook.secret.encode(),
             body.encode(),
@@ -106,7 +103,6 @@ def deliver_webhook(self, webhook_id: int, event: str, data: dict):
             response = client.post(webhook.url, content=body, headers=headers)
             response.raise_for_status()
 
-        # Success: reset failure count
         webhook.last_triggered_at = datetime.now(timezone.utc)
         webhook.failure_count = 0
         db.commit()

@@ -1,3 +1,8 @@
+"""
+Aggregate blacklist status per ip_block (/24).
+Refreshed periodically by Celery task from scan_results.
+"""
+
 from datetime import datetime
 from decimal import Decimal
 
@@ -9,12 +14,16 @@ from sqlalchemy.sql import func
 from app.db.session import Base
 
 
-class SubnetStatus(Base):
-    __tablename__ = "subnet_status"
+class BlockStatus(Base):
+    """Blacklist status cache per /24 block (maps to Ripefy ip_blocks)."""
+    __tablename__ = "block_status"
     __table_args__ = {"schema": "blacklistify"}
 
-    subnet_id: Mapped[str] = mapped_column(String(36), primary_key=True)  # Ripefy UUID
-    subnet_cidr: Mapped[str] = mapped_column(String(43), nullable=False)
+    block_id: Mapped[str] = mapped_column(String(36), primary_key=True)  # Ripefy ip_blocks.id
+    block_cidr: Mapped[str] = mapped_column(String(43), nullable=False)  # e.g. "185.87.120.0/24"
+    prefix_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)  # Ripefy ip_prefixes.id
+    prefix_cidr: Mapped[str | None] = mapped_column(String(43), nullable=True)  # e.g. "185.87.120.0/22"
+    customer_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     total_ips: Mapped[int] = mapped_column(Integer, default=0)
     blacklisted_ips: Mapped[int] = mapped_column(Integer, default=0)
     clean_ips: Mapped[int] = mapped_column(Integer, default=0)

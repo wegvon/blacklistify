@@ -5,7 +5,7 @@ from app.models.check_history import CheckHistory
 from app.models.hostname import Hostname
 from app.models.scan_job import ScanJob
 from app.models.scan_result import ScanResult
-from app.models.subnet_status import SubnetStatus
+from app.models.subnet_status import BlockStatus
 from app.models.user import User
 from app.models.webhook import Webhook
 
@@ -16,7 +16,7 @@ __all__ = [
     "BlacklistedHostname",
     "ScanJob",
     "ScanResult",
-    "SubnetStatus",
+    "BlockStatus",
     "ApiKey",
     "Webhook",
     "AlertRule",
