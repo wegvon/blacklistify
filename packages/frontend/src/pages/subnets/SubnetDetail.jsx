@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { getSubnetStatus, getSubnetResults, triggerSubnetScan } from "../../services/subnets";
+import { getBlockStatus, getBlockResults, triggerBlockScan } from "../../services/subnets";
 import toast from "react-hot-toast";
 
 export default function SubnetDetail() {
@@ -18,8 +18,8 @@ export default function SubnetDetail() {
   const fetchData = async () => {
     try {
       const [statusData, resultsData] = await Promise.all([
-        getSubnetStatus(subnetId).catch(() => null),
-        getSubnetResults(subnetId, true).catch(() => []),
+        getBlockStatus(subnetId).catch(() => null),
+        getBlockResults(subnetId, true).catch(() => []),
       ]);
       setStatus(statusData);
       setResults(resultsData);
@@ -33,7 +33,7 @@ export default function SubnetDetail() {
   const handleScan = async () => {
     setScanning(true);
     try {
-      const result = await triggerSubnetScan(subnetId);
+      const result = await triggerBlockScan(subnetId);
       toast.success(`Scan started: ${result.total_ips} IPs in ${result.batches} batches`);
     } catch (err) {
       toast.error("Failed to trigger scan");

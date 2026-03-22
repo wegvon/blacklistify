@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { listSubnets, getSubnetsSummary } from "../../services/subnets";
+import { listBlocks, getSubnetsSummary } from "../../services/subnets";
 import toast from "react-hot-toast";
 
 export default function SubnetList() {
@@ -12,11 +12,11 @@ export default function SubnetList() {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [subnetData, summaryData] = await Promise.all([
-          listSubnets(),
+        const [blockData, summaryData] = await Promise.all([
+          listBlocks(),
           getSubnetsSummary(),
         ]);
-        setSubnets(subnetData);
+        setSubnets(blockData);
         setSummary(summaryData);
       } catch (err) {
         toast.error("Failed to load subnet data");
