@@ -30,23 +30,28 @@ LEGACY_TABLES = {"users", "hostnames", "check_histories", "blacklisted_hostnames
 async def lifespan(_: FastAPI):
     # Only auto-create legacy tables (public schema).
     # blacklistify.* tables are managed by Alembic migrations.
-    legacy_tables = [
-        t for t in Base.metadata.sorted_tables
-        if t.name in LEGACY_TABLES and t.schema is None
-    ]
-    Base.metadata.create_all(bind=engine, tables=legacy_tables)
-
-    # Run Alembic migrations for blacklistify schema
     try:
-        _run_alembic_upgrade()
+        legacy_tables = [
+            t for t in Base.metadata.sorted_tables
+            if t.name in LEGACY_TABLES and t.schema is None
+        ]
+        Base.metadata.create_all(bind=engine, tables=legacy_tables)
+
+        # Run Alembic migrations for blacklistify schema
+        try:
+            _run_alembic_upgrade()
+        except Exception as e:
+            logger.warning("Alembic migration skipped: %s", e)
+
+        db = SessionLocal()
+        try:
+            seed_default_admin(db)
+        finally:
+            db.close()
     except Exception as e:
-        logger.warning("Alembic migration skipped: %s", e)
-
-    db = SessionLocal()
-    try:
-        seed_default_admin(db)
-    finally:
-        db.close()
+        # Don't crash the app if DB is temporarily unavailable.
+        # Health check will still work, endpoints will fail gracefully.
+        logger.error("Database initialization failed: %s", e)
 
     yield
 
