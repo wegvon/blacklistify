@@ -24,7 +24,8 @@ RUN apk add --no-cache \
     curl \
     build-base \
     libffi-dev \
-    libpq-dev
+    libpq-dev \
+    redis
 
 # Python deps
 COPY packages/backend/requirements.txt ./
@@ -36,9 +37,9 @@ COPY packages/backend/ ./
 # Frontend static files -> nginx
 COPY --from=frontend-build /app/dist /usr/share/nginx/html
 
-# Nginx config
+# Nginx config — Alpine nginx uses /etc/nginx/http.d/
+RUN rm -f /etc/nginx/http.d/default.conf
 COPY packages/frontend/nginx.conf /etc/nginx/http.d/default.conf
-RUN rm -f /etc/nginx/http.d/default.conf.bak
 
 # Supervisord config
 RUN mkdir -p /var/log/supervisor
