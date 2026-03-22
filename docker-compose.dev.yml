@@ -1,0 +1,30 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: backend
+    volumes:
+      - ./packages/backend:/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8100 --reload
+    environment:
+      APP_DEBUG: "true"
+
+  worker:
+    volumes:
+      - ./packages/backend:/app
+    command: celery -A app.core.celery_app worker -l debug -c 2 -Q default,scans
+
+  beat:
+    volumes:
+      - ./packages/backend:/app
+    command: celery -A app.core.celery_app beat -l debug --schedule /tmp/celerybeat-schedule
+
+  frontend:
+    build:
+      context: ./packages/frontend
+      dockerfile: Dockerfile.dev
+    volumes:
+      - ./packages/frontend/src:/app/src
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"

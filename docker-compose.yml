@@ -1,24 +1,73 @@
 services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
   backend:
-    build: ./backend
-    env_file:
-      - .env
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: backend
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    env_file: .env
     environment:
-      - APP_DEBUG=true
-      - APP_SECRET_KEY=change-me-in-production
-      - APP_CORS_ALLOWED_ORIGINS=http://localhost:3000
-      - DATABASE_URL=sqlite:///./app.db
-      - DEFAULT_ADMIN_USERNAME=admin
-      - DEFAULT_ADMIN_EMAIL=admin@abusebox.local
-      - DEFAULT_ADMIN_PASSWORD=password123
-      - DEFAULT_ADMIN_PHONE=11111111
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
     ports:
-      - 8100:8100
+      - "${BACKEND_PORT:-8100}:8100"
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: worker
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+    command: celery -A app.core.celery_app worker -l info -c 4 -Q default,scans
+
+  beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: worker
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+    command: celery -A app.core.celery_app beat -l info --schedule /tmp/celerybeat-schedule
+
   frontend:
-    build: ./frontend
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: frontend
+    restart: unless-stopped
     depends_on:
       - backend
-    environment:
-      - VITE_BASE_URL=http://backend:8100
     ports:
-      - 3000:3000
+      - "${FRONTEND_PORT:-3000}:80"
+
+volumes:
+  redisdata:

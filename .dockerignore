@@ -1,0 +1,50 @@
+# Git
+.git
+.gitignore
+
+# Documentation
+*.md
+!packages/backend/README.md
+docs/
+files/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+*.db
+*.sqlite3
+
+# Node
+packages/frontend/node_modules/
+packages/frontend/.yarn/cache/
+packages/frontend/.yarn/unplugged/
+
+# Docker
+docker-compose*.yml
+Dockerfile
+.dockerignore
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# CI/CD
+.github/
+
+# Dev files
+dev-plan.md
+.claude/
+.editorconfig
