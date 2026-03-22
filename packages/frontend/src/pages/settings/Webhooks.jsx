@@ -79,7 +79,7 @@ export default function Webhooks() {
 
   return (
     <div className="p-6">
-      <h1 className="text-2xl font-bold text-white mb-6">Webhooks</h1>
+      <h1 className="text-2xl font-bold text-slate-900 mb-6">Webhooks</h1>
 
       {/* Create Webhook */}
       <div className="bg-slate-800 rounded-xl p-4 mb-6">

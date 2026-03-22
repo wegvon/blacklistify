@@ -50,7 +50,7 @@ export default function Alerts() {
 
   return (
     <div className="p-6">
-      <h1 className="text-2xl font-bold text-white mb-6">Alert Rules</h1>
+      <h1 className="text-2xl font-bold text-slate-900 mb-6">Alert Rules</h1>
 
       <div className="bg-slate-800 rounded-xl p-4 mb-6">
         <h2 className="text-sm font-medium text-slate-300 mb-3">Create Alert Rule</h2>

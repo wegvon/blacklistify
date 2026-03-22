@@ -50,11 +50,11 @@ export default function SubnetDetail() {
     <div className="p-6">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <button onClick={() => navigate("/dashboard/subnets")} className="text-sm text-slate-400 hover:text-white mb-2">
+          <button onClick={() => navigate("/dashboard/subnets")} className="text-sm text-slate-500 hover:text-slate-900 mb-2">
             &larr; Back to Subnets
           </button>
-          <h1 className="text-2xl font-bold text-white font-mono">
-            {status?.subnet_cidr || subnetId}
+          <h1 className="text-2xl font-bold text-slate-900 font-mono">
+            {status?.block_cidr || subnetId}
           </h1>
         </div>
         <button
@@ -91,7 +91,7 @@ export default function SubnetDetail() {
       )}
 
       {/* Blacklisted IPs Table */}
-      <h2 className="text-lg font-semibold text-white mb-4">Blacklisted IPs</h2>
+      <h2 className="text-lg font-semibold text-slate-900 mb-4">Blacklisted IPs</h2>
       <div className="bg-slate-800 rounded-xl overflow-hidden">
         <table className="w-full text-left">
           <thead className="bg-slate-700">

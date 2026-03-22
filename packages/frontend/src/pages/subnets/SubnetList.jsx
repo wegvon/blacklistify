@@ -33,7 +33,7 @@ export default function SubnetList() {
 
   return (
     <div className="p-6">
-      <h1 className="text-2xl font-bold text-white mb-6">Subnet Monitoring</h1>
+      <h1 className="text-2xl font-bold text-slate-900 mb-6">Subnet Monitoring</h1>
 
       {/* Summary Cards */}
       {summary && (

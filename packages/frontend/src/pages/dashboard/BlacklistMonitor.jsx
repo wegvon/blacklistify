@@ -4,8 +4,7 @@ import { HiOutlinePlusCircle } from 'react-icons/hi'
 import HostnameService from "../../services/hostname";
 import HostnameTable from "../../components/dashboard/blacklistMonitor/HostnameTable";
 import AddNewMonitorDialog from "../../components/dashboard/blacklistMonitor/AddNewMonitorDialog";
-import { toast, ToastContainer } from 'react-toastify';
-import 'react-toastify/dist/ReactToastify.css';
+import toast from 'react-hot-toast';
 
 export default function BlacklistMonitor() {
   const [addModalOpen, setAddModalOpen] = useState(false);
@@ -128,7 +127,6 @@ export default function BlacklistMonitor() {
         />
       </div>
 
-      <ToastContainer position="top-center" autoClose={5000} />
     </section>
   );
 }

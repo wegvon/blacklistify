@@ -2,8 +2,7 @@ import React, { useState } from 'react';
 import { Dialog, Transition } from '@headlessui/react';
 import FormFieldRender from './FormFieldRender';
 import DelistSerivce from '../../../services/blacklist/delist';
-import { toast, ToastContainer } from 'react-toastify';
-import 'react-toastify/dist/ReactToastify.css';
+import toast from 'react-hot-toast';
 import { useNavigate } from "react-router-dom";
 
 const DelistModal = ({ isOpen, onClose, provider, data, fields }) => {
@@ -95,7 +94,6 @@ const DelistModal = ({ isOpen, onClose, provider, data, fields }) => {
         </Dialog>
       </Transition>
 
-      <ToastContainer position="top-center" autoClose={5000} />
     </div>
   );
 };

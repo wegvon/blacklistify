@@ -54,8 +54,13 @@ export default function Sidebar() {
 function SidebarLink({item}) {
   const { pathname } = useLocation()
   const isExternal = item.path.startsWith('http') || item.path.startsWith('/swagger/')
+  const isActive = !isExternal && (
+    item.path === '/dashboard'
+      ? pathname === '/dashboard'
+      : pathname === item.path || pathname.startsWith(item.path + '/')
+  );
   const classes = classNames(
-    !isExternal && pathname === item.path ? 'bg-slate-800 text-white' : 'text-slate-300',
+    isActive ? 'bg-slate-800 text-white' : 'text-slate-300',
     linkClass
   )
 
