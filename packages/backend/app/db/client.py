@@ -62,8 +62,10 @@ class SupabaseDB:
         query = self.client.table(table).select(columns)
         for key, value in filters.items():
             query = query.eq(key, value)
-        result = query.maybe_single().execute()
-        return result.data
+        result = query.limit(1).execute()
+        if result and result.data:
+            return result.data[0]
+        return None
 
     def update(self, table: str, filters: dict, data: dict) -> list[dict]:
         query = self.client.table(table).update(data)
