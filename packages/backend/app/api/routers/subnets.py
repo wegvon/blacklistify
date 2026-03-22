@@ -1,212 +1,92 @@
-"""
-Subnet/block listing and status endpoints.
-Reads ip_prefixes and ip_blocks from Ripefy Supabase + block_status from blacklistify schema.
-"""
+"""Subnet/block listing and status endpoints — all via Supabase REST API."""
 
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.security import get_auth_context, require_scope, AuthContext
-from app.db.session import get_db
-from app.db.supabase_read import subnet_reader
-from app.models.scan_result import ScanResult
-from app.models.subnet_status import BlockStatus
+from app.db.client import db
 from app.schemas.subnet import BlockResponse, BlockStatusResponse, PrefixResponse, SummaryResponse
 
 router = APIRouter(prefix="/api/v1/subnets", tags=["subnets"])
 
 
-# ── Prefixes (/22) ──────────────────────────────────────────────────────
-
 @router.get("/prefixes", response_model=list[PrefixResponse])
-def list_prefixes(
-    auth: AuthContext = Depends(require_scope("read")),
-):
-    """List all /22 prefixes from Ripefy."""
-    try:
-        prefixes = subnet_reader.get_all_prefixes()
-    except Exception as e:
-        raise HTTPException(503, f"Failed to read from Ripefy: {e}")
+def list_prefixes(auth: AuthContext = Depends(require_scope("read"))):
+    prefixes = db.get_all_prefixes()
+    return [PrefixResponse(id=p["id"], ripe_account_id=p.get("ripe_account_id"), cidr=p["cidr"], is_test=p.get("is_test", False), description=p.get("description")) for p in prefixes]
 
-    return [
-        PrefixResponse(
-            id=p.get("id", ""),
-            ripe_account_id=p.get("ripe_account_id"),
-            cidr=p.get("cidr", ""),
-            is_test=p.get("is_test", False),
-            description=p.get("description"),
-        )
-        for p in prefixes
-    ]
-
-
-# ── Blocks (/24) ────────────────────────────────────────────────────────
 
 @router.get("/blocks", response_model=list[BlockResponse])
-def list_blocks(
-    status: str | None = Query(None, description="Filter by status: free, leased"),
-    auth: AuthContext = Depends(require_scope("read")),
-):
-    """List all /24 blocks from Ripefy."""
-    try:
-        blocks = subnet_reader.get_all_blocks(status=status)
-    except Exception as e:
-        raise HTTPException(503, f"Failed to read from Ripefy: {e}")
+def list_blocks(status_filter: str | None = Query(None, alias="status"), auth: AuthContext = Depends(require_scope("read"))):
+    blocks = db.get_all_blocks(status=status_filter)
+    return [BlockResponse(id=b["id"], prefix_id=b.get("prefix_id", ""), cidr=b["cidr"], status=b.get("status", ""), current_lease_id=b.get("current_lease_id"), notes=b.get("notes")) for b in blocks]
 
-    return [
-        BlockResponse(
-            id=b.get("id", ""),
-            prefix_id=b.get("prefix_id", ""),
-            cidr=b.get("cidr", ""),
-            status=b.get("status", ""),
-            current_lease_id=b.get("current_lease_id"),
-            notes=b.get("notes"),
-        )
-        for b in blocks
-    ]
-
-
-# ── Summary ─────────────────────────────────────────────────────────────
 
 @router.get("/summary", response_model=SummaryResponse)
-def get_summary(
-    auth: AuthContext = Depends(require_scope("read")),
-    db: Session = Depends(get_db),
-):
-    """Aggregate blacklist status across all blocks."""
-    statuses = db.query(BlockStatus).all()
-
+def get_summary(auth: AuthContext = Depends(require_scope("read"))):
+    statuses = db.get_all_block_statuses()
     total_blocks = len(statuses)
-    total_ips = sum(s.total_ips for s in statuses)
-    blacklisted = sum(s.blacklisted_ips for s in statuses)
-    clean = sum(s.clean_ips for s in statuses)
-    rate = round(blacklisted / total_ips, 4) if total_ips > 0 else 0.0
-
-    # Prefix count
-    prefix_ids = set(s.prefix_id for s in statuses if s.prefix_id)
-
-    # Last scan info
-    last_scan = None
-    latest = max(statuses, key=lambda s: s.last_scanned_at or "", default=None)
-    if latest and latest.last_scan_job_id:
-        from app.models.scan_job import ScanJob
-        job = db.query(ScanJob).filter_by(id=latest.last_scan_job_id).first()
-        if job:
-            duration = None
-            if job.started_at and job.completed_at:
-                duration = int((job.completed_at - job.started_at).total_seconds())
-            last_scan = {
-                "job_id": job.id,
-                "type": job.job_type,
-                "completed_at": job.completed_at.isoformat() if job.completed_at else None,
-                "duration_seconds": duration,
-            }
+    total_ips = sum(s.get("total_ips", 0) for s in statuses)
+    blacklisted = sum(s.get("blacklisted_ips", 0) for s in statuses)
+    clean = sum(s.get("clean_ips", 0) for s in statuses)
+    prefix_ids = set(s.get("prefix_id") for s in statuses if s.get("prefix_id"))
 
     return SummaryResponse(
-        total_prefixes=len(prefix_ids),
-        total_blocks=total_blocks,
-        total_ips=total_ips,
-        blacklisted_ips=blacklisted,
-        clean_ips=clean,
-        blacklist_rate=rate,
-        last_scan=last_scan,
+        total_prefixes=len(prefix_ids), total_blocks=total_blocks,
+        total_ips=total_ips, blacklisted_ips=blacklisted, clean_ips=clean,
+        blacklist_rate=round(blacklisted / total_ips, 4) if total_ips > 0 else 0,
     )
 
 
-# ── Block status ────────────────────────────────────────────────────────
-
 @router.get("/blocks/{block_id}/status", response_model=BlockStatusResponse)
-def get_block_status(
-    block_id: str,
-    auth: AuthContext = Depends(require_scope("read")),
-    db: Session = Depends(get_db),
-):
-    """Get blacklist status for a specific /24 block."""
-    status = db.query(BlockStatus).filter_by(block_id=block_id).first()
-    if not status:
+def get_block_status(block_id: str, auth: AuthContext = Depends(require_scope("read"))):
+    s = db.get_block_status(block_id)
+    if not s:
         raise HTTPException(404, "No scan data for this block yet")
-
     return BlockStatusResponse(
-        block_id=status.block_id,
-        block_cidr=status.block_cidr,
-        prefix_id=status.prefix_id,
-        prefix_cidr=status.prefix_cidr,
-        customer_name=status.customer_name,
-        total_ips=status.total_ips,
-        blacklisted_ips=status.blacklisted_ips,
-        clean_ips=status.clean_ips,
-        blacklist_rate=float(status.blacklist_rate),
-        worst_providers=status.worst_providers or [],
-        last_scanned_at=status.last_scanned_at.isoformat() if status.last_scanned_at else None,
+        block_id=s["block_id"], block_cidr=s["block_cidr"],
+        prefix_id=s.get("prefix_id"), prefix_cidr=s.get("prefix_cidr"),
+        customer_name=s.get("customer_name"), total_ips=s.get("total_ips", 0),
+        blacklisted_ips=s.get("blacklisted_ips", 0), clean_ips=s.get("clean_ips", 0),
+        blacklist_rate=float(s.get("blacklist_rate", 0)),
+        worst_providers=s.get("worst_providers", []),
+        last_scanned_at=s.get("last_scanned_at"),
     )
 
 
 @router.get("/blocks/{block_id}/results")
-def get_block_results(
-    block_id: str,
-    blacklisted_only: bool = Query(False),
-    limit: int = Query(100, le=500),
-    auth: AuthContext = Depends(require_scope("read")),
-    db: Session = Depends(get_db),
-):
-    """Get scan results for a specific /24 block."""
-    query = db.query(ScanResult).filter_by(block_id=block_id)
-
-    if blacklisted_only:
-        query = query.filter_by(is_blacklisted=True)
-
-    results = query.order_by(ScanResult.checked_at.desc()).limit(limit).all()
-
+def get_block_results(block_id: str, blacklisted_only: bool = Query(False), limit: int = Query(100, le=500), auth: AuthContext = Depends(require_scope("read"))):
+    results = db.get_results_by_block(block_id, blacklisted_only=blacklisted_only, limit=limit)
     return [
-        {
-            "id": r.id,
-            "ip_address": str(r.ip_address),
-            "is_blacklisted": r.is_blacklisted,
-            "providers_detected": r.providers_detected or [],
-            "providers_total": r.providers_total,
-            "checked_at": r.checked_at.isoformat() if r.checked_at else None,
-        }
+        {"id": r["id"], "ip_address": str(r.get("ip_address", "")), "is_blacklisted": r.get("is_blacklisted", False), "providers_detected": r.get("providers_detected", []), "providers_total": r.get("providers_total", 0), "checked_at": r.get("checked_at")}
         for r in results
     ]
 
 
 @router.post("/blocks/{block_id}/scan")
-def trigger_block_scan(
-    block_id: str,
-    auth: AuthContext = Depends(require_scope("scan")),
-    db: Session = Depends(get_db),
-):
-    """Trigger a manual scan for a specific /24 block."""
-    block = subnet_reader.get_block_by_id(block_id)
+def trigger_block_scan(block_id: str, auth: AuthContext = Depends(require_scope("scan"))):
+    block = db.get_block_by_id(block_id)
     if not block:
         raise HTTPException(404, "Block not found in Ripefy")
 
-    # Get prefix info
-    prefix = subnet_reader.get_prefix_by_id(block.get("prefix_id", ""))
-
-    from app.models.scan_job import ScanJob
-    from app.services.subnet_expander import cidr_to_ips, split_into_batches
-    from app.core.config import settings
-
+    prefix = db.get_prefix_by_id(block.get("prefix_id", ""))
     cidr = block.get("cidr", "")
-    ips = cidr_to_ips(cidr)
 
-    job = ScanJob(
-        job_type="manual",
-        status="running",
-        total_subnets=1,
-        total_ips=len(ips),
-        started_at=datetime.now(timezone.utc),
-    )
-    db.add(job)
-    db.commit()
-    db.refresh(job)
+    from app.services.subnet_expander import cidr_to_ips, split_into_batches
+
+    ips = cidr_to_ips(cidr)
+    job = db.create_scan_job({
+        "job_type": "manual",
+        "status": "running",
+        "total_subnets": 1,
+        "total_ips": len(ips),
+        "started_at": datetime.now(timezone.utc).isoformat(),
+    })
 
     block_meta = {
-        "block_id": block["id"],
-        "block_cidr": cidr,
+        "block_id": block["id"], "block_cidr": cidr,
         "prefix_id": block.get("prefix_id", ""),
         "prefix_cidr": prefix.get("cidr", "") if prefix else "",
     }
@@ -214,16 +94,6 @@ def trigger_block_scan(
     from app.tasks.scan_subnet import scan_block_batch
     batches = split_into_batches(ips, settings.scan_batch_size)
     for batch in batches:
-        scan_block_batch.delay(
-            job_id=job.id,
-            ips=batch,
-            blocks=[block_meta] * len(batch),
-        )
+        scan_block_batch.delay(job_id=job["id"], ips=batch, blocks=[block_meta] * len(batch))
 
-    return {
-        "job_id": job.id,
-        "status": "running",
-        "block_cidr": cidr,
-        "total_ips": len(ips),
-        "batches": len(batches),
-    }
+    return {"job_id": job["id"], "status": "running", "block_cidr": cidr, "total_ips": len(ips), "batches": len(batches)}

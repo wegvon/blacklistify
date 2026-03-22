@@ -5,14 +5,9 @@ from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 from passlib.context import CryptContext
-from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.db.session import get_db
-from app.models.user import User
 
-
-# Use PBKDF2-SHA256 to avoid bcrypt backend/runtime incompatibilities in minimal containers.
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 bearer = HTTPBearer(auto_error=False)
 
@@ -58,8 +53,8 @@ def decode_token(token: str) -> dict[str, Any]:
 
 def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(bearer),
-    db: Session = Depends(get_db),
-) -> User:
+) -> dict:
+    """Validate JWT and return user dict from Supabase."""
     if not credentials:
         raise AuthError("Not authenticated")
 
@@ -71,10 +66,11 @@ def get_current_user(
     if not username:
         raise AuthError("Invalid token payload")
 
-    user = db.query(User).filter(User.username == username).first()
+    from app.db.client import db
+    user = db.get_user_by_username(username)
     if not user:
         raise AuthError("User not found")
-    if not user.is_active:
+    if not user.get("is_active", True):
         raise AuthError("User is inactive")
 
     return user
@@ -84,42 +80,35 @@ def get_current_user(
 # API Key authentication
 # ---------------------------------------------------------------------------
 
-def _validate_api_key(api_key: str, db: Session):
-    """Validate an API key and return the ApiKey record."""
-    from app.models.api_key import ApiKey
+def _validate_api_key(api_key: str) -> dict:
+    from app.db.client import db
 
     if not api_key or not api_key.startswith("blf_"):
         raise AuthError("Invalid API key format")
 
     prefix = api_key[:8]
-    key_record = db.query(ApiKey).filter(
-        ApiKey.key_prefix == prefix,
-        ApiKey.is_active == True,
-    ).first()
-
+    key_record = db.get_api_key_by_prefix(prefix)
     if not key_record:
         raise AuthError("Invalid API key")
 
-    # Verify hash
-    if not pwd_context.verify(api_key, key_record.key_hash):
+    if not pwd_context.verify(api_key, key_record["key_hash"]):
         raise AuthError("Invalid API key")
 
-    # Check expiry
-    if key_record.expires_at and key_record.expires_at < datetime.now(timezone.utc):
-        raise AuthError("API key expired")
+    if key_record.get("expires_at"):
+        from dateutil.parser import parse as parse_date
+        try:
+            if parse_date(key_record["expires_at"]) < datetime.now(timezone.utc):
+                raise AuthError("API key expired")
+        except Exception:
+            pass
 
-    # Update last_used_at
-    key_record.last_used_at = datetime.now(timezone.utc)
-    db.commit()
-
+    db.update_api_key_used(key_record["id"])
     return key_record
 
 
 class AuthContext:
-    """Unified auth context for JWT or API key authentication."""
-
-    def __init__(self, auth_type: str, user: User | None = None, api_key: Any = None):
-        self.auth_type = auth_type  # "jwt" or "api_key"
+    def __init__(self, auth_type: str, user: dict | None = None, api_key: dict | None = None):
+        self.auth_type = auth_type
         self.user = user
         self.api_key = api_key
 
@@ -128,7 +117,7 @@ class AuthContext:
         if self.auth_type == "jwt":
             return ["read", "write", "scan", "admin"]
         if self.api_key:
-            return self.api_key.scopes or ["read"]
+            return self.api_key.get("scopes") or ["read"]
         return []
 
     def has_scope(self, scope: str) -> bool:
@@ -138,47 +127,21 @@ class AuthContext:
 def get_auth_context(
     credentials: HTTPAuthorizationCredentials = Depends(bearer),
     x_api_key: str | None = Header(None, alias="X-API-Key"),
-    db: Session = Depends(get_db),
 ) -> AuthContext:
-    """
-    Authenticate via JWT Bearer token OR X-API-Key header.
-    JWT takes priority if both are provided.
-    """
-    # Try JWT first
     if credentials:
-        try:
-            user = get_current_user.__wrapped__(credentials, db) if hasattr(get_current_user, '__wrapped__') else None
-        except Exception:
-            user = None
-
-        if user is None:
-            payload = decode_token(credentials.credentials)
-            if payload.get("type") != "access":
-                raise AuthError("Invalid token type")
-            username = payload.get("sub")
-            if not username:
-                raise AuthError("Invalid token payload")
-            user = db.query(User).filter(User.username == username).first()
-            if not user or not user.is_active:
-                raise AuthError("User not found or inactive")
-
+        user = get_current_user(credentials)
         return AuthContext(auth_type="jwt", user=user)
 
-    # Try API key
     if x_api_key:
-        key_record = _validate_api_key(x_api_key, db)
+        key_record = _validate_api_key(x_api_key)
         return AuthContext(auth_type="api_key", api_key=key_record)
 
     raise AuthError("Authentication required. Provide Bearer token or X-API-Key header.")
 
 
 def require_scope(scope: str):
-    """Dependency factory that checks for a specific scope."""
     def checker(auth: AuthContext = Depends(get_auth_context)):
         if not auth.has_scope(scope):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Insufficient permissions. Required scope: {scope}",
-            )
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Required scope: {scope}")
         return auth
     return checker

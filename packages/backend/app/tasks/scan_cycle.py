@@ -1,33 +1,19 @@
-"""
-Scan cycle orchestration tasks.
-Reads ip_blocks (/24) from Ripefy Supabase, dispatches DNSBL checks.
-
-Real Ripefy structure:
-  ip_prefixes (/22, 77 rows) -> ip_blocks (/24, 308 rows, ~78K IPs)
-  Scan unit = ip_block (/24 = 254 usable IPs)
-"""
+"""Scan cycle orchestration — uses Supabase REST API for all DB ops."""
 
 import logging
 from datetime import datetime, timezone
 
 from app.core.celery_app import celery
 from app.core.config import settings
-from app.db.session import SessionLocal
-from app.db.supabase_read import subnet_reader
-from app.models.scan_job import ScanJob
-from app.models.subnet_status import BlockStatus
+from app.db.client import db
 from app.services.subnet_expander import cidr_to_ips, split_into_batches
 
 logger = logging.getLogger(__name__)
 
 
 def _fetch_blocks_with_prefix_info() -> list[dict]:
-    """
-    Fetch all ip_blocks from Ripefy and enrich with prefix info.
-    Returns list of dicts with block_id, block_cidr, prefix_id, prefix_cidr.
-    """
-    blocks = subnet_reader.get_all_blocks()
-    prefixes = {p["id"]: p for p in subnet_reader.get_all_prefixes()}
+    blocks = db.get_all_blocks()
+    prefixes = {p["id"]: p for p in db.get_all_prefixes()}
 
     enriched = []
     for block in blocks:
@@ -43,255 +29,145 @@ def _fetch_blocks_with_prefix_info() -> list[dict]:
 
 @celery.task(bind=True, name="app.tasks.scan_cycle.run_sampling_scan")
 def run_sampling_scan(self):
-    """
-    Sampling scan: pick 1 representative IP per /24 block.
-    Since all blocks are /24, we just check .1 of each block.
-    Runs every N hours (configured via SCAN_INTERVAL_HOURS).
-    """
-    db = SessionLocal()
+    """Sampling: 1 IP per /24 block (.1 address)."""
     try:
-        job = ScanJob(
-            job_type="sampling",
-            status="running",
-            started_at=datetime.now(timezone.utc),
-        )
-        db.add(job)
-        db.commit()
-        db.refresh(job)
+        job = db.create_scan_job({
+            "job_type": "sampling",
+            "status": "running",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+        })
+        logger.info("Starting sampling scan job #%d", job["id"])
 
-        logger.info("Starting sampling scan job #%d", job.id)
-
-        try:
-            blocks = _fetch_blocks_with_prefix_info()
-        except Exception as e:
-            job.status = "failed"
-            job.error_message = f"Failed to read blocks from Ripefy: {e}"
-            job.completed_at = datetime.now(timezone.utc)
-            db.commit()
-            logger.error("Sampling scan failed: %s", e)
-            return
-
+        blocks = _fetch_blocks_with_prefix_info()
         if not blocks:
-            job.status = "completed"
-            job.completed_at = datetime.now(timezone.utc)
-            db.commit()
-            logger.info("No blocks found, scan completed")
+            db.update_scan_job(job["id"], {"status": "completed", "completed_at": datetime.now(timezone.utc).isoformat()})
             return
 
-        job.total_subnets = len(blocks)
+        db.update_scan_job(job["id"], {"total_subnets": len(blocks)})
 
-        # For sampling: 1 IP per /24 block (the .1 address)
         all_tasks = []
-        total_ips = 0
-        batch_ips = []
-        batch_meta = []
+        batch_ips, batch_meta = [], []
 
         for block in blocks:
-            cidr = block["block_cidr"]
-            # Get .1 address as representative sample
-            network_part = cidr.split("/")[0]
+            network_part = block["block_cidr"].split("/")[0]
             parts = network_part.split(".")
             sample_ip = f"{parts[0]}.{parts[1]}.{parts[2]}.1"
 
             batch_ips.append(sample_ip)
             batch_meta.append(block)
-            total_ips += 1
 
             if len(batch_ips) >= settings.scan_batch_size:
-                all_tasks.append({
-                    "job_id": job.id,
-                    "ips": batch_ips[:],
-                    "blocks": batch_meta[:],
-                })
+                all_tasks.append({"job_id": job["id"], "ips": batch_ips[:], "blocks": batch_meta[:]})
                 batch_ips.clear()
                 batch_meta.clear()
 
-        # Remaining batch
         if batch_ips:
-            all_tasks.append({
-                "job_id": job.id,
-                "ips": batch_ips[:],
-                "blocks": batch_meta[:],
-            })
+            all_tasks.append({"job_id": job["id"], "ips": batch_ips[:], "blocks": batch_meta[:]})
 
-        job.total_ips = total_ips
-        db.commit()
+        db.update_scan_job(job["id"], {"total_ips": len(blocks)})
 
         from app.tasks.scan_subnet import scan_block_batch
-        for task_data in all_tasks:
-            scan_block_batch.delay(
-                job_id=task_data["job_id"],
-                ips=task_data["ips"],
-                blocks=task_data["blocks"],
-            )
+        for t in all_tasks:
+            scan_block_batch.delay(job_id=t["job_id"], ips=t["ips"], blocks=t["blocks"])
 
-        logger.info(
-            "Sampling scan job #%d: dispatched %d batches for %d blocks",
-            job.id, len(all_tasks), len(blocks),
-        )
+        logger.info("Sampling scan #%d: %d batches, %d blocks", job["id"], len(all_tasks), len(blocks))
 
     except Exception as e:
         logger.exception("Sampling scan failed: %s", e)
-    finally:
-        db.close()
 
 
 @celery.task(bind=True, name="app.tasks.scan_cycle.run_full_scan")
 def run_full_scan(self):
-    """
-    Full scan: scan ALL IPs in ALL /24 blocks (254 IPs each).
-    308 blocks x 254 IPs = ~78K IPs.
-    Runs weekly, bypasses cache.
-    """
-    db = SessionLocal()
+    """Full scan: all IPs in all /24 blocks."""
     try:
-        job = ScanJob(
-            job_type="full",
-            status="running",
-            started_at=datetime.now(timezone.utc),
-        )
-        db.add(job)
-        db.commit()
-        db.refresh(job)
+        job = db.create_scan_job({
+            "job_type": "full",
+            "status": "running",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+        })
+        logger.info("Starting full scan job #%d", job["id"])
 
-        logger.info("Starting full scan job #%d", job.id)
-
-        try:
-            blocks = _fetch_blocks_with_prefix_info()
-        except Exception as e:
-            job.status = "failed"
-            job.error_message = f"Failed to read blocks from Ripefy: {e}"
-            job.completed_at = datetime.now(timezone.utc)
-            db.commit()
-            return
-
+        blocks = _fetch_blocks_with_prefix_info()
         if not blocks:
-            job.status = "completed"
-            job.completed_at = datetime.now(timezone.utc)
-            db.commit()
+            db.update_scan_job(job["id"], {"status": "completed", "completed_at": datetime.now(timezone.utc).isoformat()})
             return
 
-        job.total_subnets = len(blocks)
+        db.update_scan_job(job["id"], {"total_subnets": len(blocks)})
+
         total_ips = 0
         all_tasks = []
-
         for block in blocks:
-            cidr = block["block_cidr"]
-            ips = cidr_to_ips(cidr)
+            ips = cidr_to_ips(block["block_cidr"])
             total_ips += len(ips)
-
             batches = split_into_batches(ips, settings.scan_batch_size)
             for batch in batches:
-                all_tasks.append({
-                    "job_id": job.id,
-                    "ips": batch,
-                    "blocks": [block] * len(batch),  # Each IP maps to same block
-                })
+                all_tasks.append({"job_id": job["id"], "ips": batch, "blocks": [block] * len(batch)})
 
-        job.total_ips = total_ips
-        db.commit()
+        db.update_scan_job(job["id"], {"total_ips": total_ips})
 
         from app.tasks.scan_subnet import scan_block_batch
-        for task_data in all_tasks:
-            scan_block_batch.delay(
-                job_id=task_data["job_id"],
-                ips=task_data["ips"],
-                blocks=task_data["blocks"],
-                bypass_cache=True,
-            )
+        for t in all_tasks:
+            scan_block_batch.delay(job_id=t["job_id"], ips=t["ips"], blocks=t["blocks"], bypass_cache=True)
 
-        logger.info(
-            "Full scan job #%d: dispatched %d batches for %d IPs across %d blocks",
-            job.id, len(all_tasks), total_ips, len(blocks),
-        )
+        logger.info("Full scan #%d: %d batches, %d IPs, %d blocks", job["id"], len(all_tasks), total_ips, len(blocks))
 
     except Exception as e:
         logger.exception("Full scan failed: %s", e)
-    finally:
-        db.close()
 
 
 @celery.task(name="app.tasks.scan_cycle.refresh_subnet_status")
 def refresh_subnet_status():
-    """
-    Recalculate block_status from latest scan_results.
-    Runs every 30 minutes.
-    """
-    db = SessionLocal()
+    """Refresh block_status from scan_results — uses Supabase REST API."""
     try:
-        from sqlalchemy import text
+        # Get all blocks with latest scan results grouped
+        all_results = db.client.table("blf_scan_results").select(
+            "block_id, block_cidr, prefix_id, prefix_cidr, ip_address, is_blacklisted, scan_job_id, checked_at"
+        ).order("checked_at", desc=True).limit(50000).execute().data or []
 
-        query = text("""
-            WITH latest_results AS (
-                SELECT DISTINCT ON (ip_address, block_cidr)
-                    block_id,
-                    block_cidr,
-                    prefix_id,
-                    prefix_cidr,
-                    ip_address,
-                    is_blacklisted,
-                    providers_detected,
-                    scan_job_id,
-                    checked_at
-                FROM blacklistify.scan_results
-                ORDER BY ip_address, block_cidr, checked_at DESC
-            )
-            SELECT
-                block_id,
-                block_cidr,
-                prefix_id,
-                prefix_cidr,
-                COUNT(*) as total_ips,
-                COUNT(*) FILTER (WHERE is_blacklisted = TRUE) as blacklisted_ips,
-                COUNT(*) FILTER (WHERE is_blacklisted = FALSE) as clean_ips,
-                MAX(scan_job_id) as last_scan_job_id,
-                MAX(checked_at) as last_scanned_at
-            FROM latest_results
-            WHERE block_id IS NOT NULL
-            GROUP BY block_id, block_cidr, prefix_id, prefix_cidr
-        """)
+        # Group by block
+        from collections import defaultdict
+        block_data = defaultdict(lambda: {"ips": set(), "blacklisted": 0, "last_job": 0, "last_checked": ""})
 
-        results = db.execute(query).fetchall()
+        for r in all_results:
+            bid = r.get("block_id")
+            if not bid:
+                continue
+            ip = r.get("ip_address", "")
+            d = block_data[bid]
+            if ip not in d["ips"]:  # Only count latest per IP
+                d["ips"].add(ip)
+                if r.get("is_blacklisted"):
+                    d["blacklisted"] += 1
+                d["block_cidr"] = r.get("block_cidr", "")
+                d["prefix_id"] = r.get("prefix_id")
+                d["prefix_cidr"] = r.get("prefix_cidr")
+                job_id = r.get("scan_job_id", 0) or 0
+                if job_id > d["last_job"]:
+                    d["last_job"] = job_id
+                checked = r.get("checked_at", "")
+                if checked > d["last_checked"]:
+                    d["last_checked"] = checked
 
-        for row in results:
-            block_id = row[0]
-            total = row[4]
-            blacklisted = row[5]
-            rate = round(blacklisted / total, 4) if total > 0 else 0
+        for block_id, d in block_data.items():
+            total = len(d["ips"])
+            bl = d["blacklisted"]
+            rate = round(bl / total, 4) if total > 0 else 0
 
-            existing = db.query(BlockStatus).filter_by(block_id=block_id).first()
-            if existing:
-                old_blacklisted = existing.blacklisted_ips
-                existing.block_cidr = row[1]
-                existing.prefix_id = row[2]
-                existing.prefix_cidr = row[3]
-                existing.total_ips = total
-                existing.blacklisted_ips = blacklisted
-                existing.clean_ips = row[6]
-                existing.blacklist_rate = rate
-                existing.last_scan_job_id = row[7]
-                existing.last_scanned_at = row[8]
-                if old_blacklisted != blacklisted:
-                    existing.status_changed_at = datetime.now(timezone.utc)
-            else:
-                new_status = BlockStatus(
-                    block_id=block_id,
-                    block_cidr=row[1],
-                    prefix_id=row[2],
-                    prefix_cidr=row[3],
-                    total_ips=total,
-                    blacklisted_ips=blacklisted,
-                    clean_ips=row[6],
-                    blacklist_rate=rate,
-                    last_scan_job_id=row[7],
-                    last_scanned_at=row[8],
-                )
-                db.add(new_status)
+            db.upsert_block_status({
+                "block_id": block_id,
+                "block_cidr": d["block_cidr"],
+                "prefix_id": d["prefix_id"],
+                "prefix_cidr": d["prefix_cidr"],
+                "total_ips": total,
+                "blacklisted_ips": bl,
+                "clean_ips": total - bl,
+                "blacklist_rate": rate,
+                "last_scan_job_id": d["last_job"] or None,
+                "last_scanned_at": d["last_checked"] or None,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            })
 
-        db.commit()
-        logger.info("Refreshed block status for %d blocks", len(results))
+        logger.info("Refreshed block status for %d blocks", len(block_data))
 
     except Exception as e:
         logger.exception("Failed to refresh block status: %s", e)
-    finally:
-        db.close()
