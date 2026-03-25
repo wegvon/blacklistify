@@ -38,8 +38,8 @@ export default function ScanHistory() {
     setSelectedJob(job);
     setResultsLoading(true);
     try {
-      const results = await getScanJobResults(job.id, false);
-      setJobResults(results);
+      const data = await getScanJobResults(job.id, false);
+      setJobResults(data.results || []);
     } catch (err) {
       toast.error("Failed to load scan results");
       setJobResults([]);
