@@ -59,13 +59,20 @@ class AsyncDNSBLChecker:
 
         detected = []
         checked = 0
+        errors = 0
         for r in results:
             if isinstance(r, Exception):
+                errors += 1
+                logger.warning("DNSBL check exception for %s: %s", ip, r)
                 continue
             provider, is_listed = r
             checked += 1
             if is_listed:
                 detected.append({"provider": provider, "status": "open"})
+
+        if errors > 0:
+            logger.warning("DNSBL check for %s: %d errors, %d checked, %d blacklisted",
+                         ip, errors, checked, len(detected))
 
         result = {
             "ip": ip,
@@ -108,5 +115,6 @@ class AsyncDNSBLChecker:
                 return (provider, True)
             except aiodns.error.DNSError:
                 return (provider, False)
-            except Exception:
+            except Exception as e:
+                logger.debug("DNS query failed for %s.%s: %s", reversed_ip, provider, e)
                 return (provider, False)
