@@ -148,7 +148,7 @@ def check_dnsbl_providers(hostname_or_ip: str) -> dict[str, Any]:
     }
 
 
-def check_ip_blacklist(ip: str, max_workers: int = 50) -> dict[str, Any]:
+def check_ip_blacklist(ip: str, max_workers: int = 20) -> dict[str, Any]:
     """Check a single IP against all DNSBL providers. Returns same format as check_dnsbl_providers."""
     reversed_ip = ".".join(reversed(ip.split(".")))
     listed: set[str] = set()
@@ -195,7 +195,14 @@ def check_ip_blacklist(ip: str, max_workers: int = 50) -> dict[str, Any]:
 
 def check_batch_blacklist(ips: list[str], max_workers: int = 50) -> list[dict[str, Any]]:
     """Check multiple IPs in parallel against all DNSBL providers."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    def _check_one(ip: str) -> dict[str, Any]:
+        return check_ip_blacklist(ip, max_workers=50)
+
     results = []
-    for ip in ips:
-        results.append(check_ip_blacklist(ip, max_workers))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_ip = {executor.submit(_check_one, ip): ip for ip in ips}
+        for future in as_completed(future_to_ip):
+            results.append(future.result())
     return results
