@@ -41,6 +41,8 @@ class AsyncDNSBLChecker:
 
     async def check_ip(self, ip: str) -> dict:
         """Check a single IP against all DNSBL providers."""
+        import sys
+        print(f"DEBUG: check_ip called for {ip}", flush=True)
         # Check cache first
         if self.cache:
             cached = self.cache.get(f"dnsbl:{ip}")
@@ -89,6 +91,8 @@ class AsyncDNSBLChecker:
 
     async def check_batch(self, ips: list[str]) -> list[dict]:
         """Check multiple IPs in parallel."""
+        import sys
+        print(f"DEBUG: check_batch called with {len(ips)} IPs: {ips[:3]}...", flush=True)
         start = time.monotonic()
         tasks = [self.check_ip(ip) for ip in ips]
         results = await asyncio.gather(*tasks)
