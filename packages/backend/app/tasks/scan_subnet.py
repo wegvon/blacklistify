@@ -13,11 +13,15 @@ logger = logging.getLogger(__name__)
 
 @celery.task(bind=True, name="app.tasks.scan_subnet.scan_block_batch", max_retries=2, default_retry_delay=60, acks_late=True)
 def scan_block_batch(self, job_id: int, ips: list[str], blocks: list[dict], bypass_cache: bool = False):
+    import sys
+    print(f"DEBUG: scan_block_batch START job_id={job_id} ips={len(ips)}", flush=True)
     start_time = time.monotonic()
 
     try:
+        print(f"DEBUG: calling check_batch_blacklist with {len(ips)} IPs", flush=True)
         # Use sync DNSBL checker (aiodns has issues in Docker)
         results = check_batch_blacklist(ips)
+        print(f"DEBUG: check_batch_blacklist returned {len(results)} results", flush=True)
 
         # Build rows for batch insert
         rows = []
