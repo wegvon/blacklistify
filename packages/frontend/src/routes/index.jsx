@@ -17,6 +17,7 @@ import ServerStatus from "../pages/dashboard/ServerStatus";
 import SubnetList from "../pages/subnets/SubnetList";
 import SubnetDetail from "../pages/subnets/SubnetDetail";
 import ScanHistory from "../pages/scans/ScanHistory";
+import ScanDetail from "../pages/scans/ScanDetail";
 import ApiKeys from "../pages/settings/ApiKeys";
 import Webhooks from "../pages/settings/Webhooks";
 import Alerts from "../pages/settings/Alerts";
@@ -83,6 +84,10 @@ const Routes = () => {
             {
               path: 'scans',
               element: <ScanHistory />
+            },
+            {
+              path: 'scans/:scanId',
+              element: <ScanDetail />
             },
             {
               path: 'settings/api-keys',

@@ -1,13 +1,11 @@
 import { useEffect, useState } from "react";
-import { listScanJobs, triggerScan, getScanJobResults } from "../../services/scans";
+import { Link } from "react-router-dom";
+import { listScanJobs, triggerScan } from "../../services/scans";
 import toast from "react-hot-toast";
 
 export default function ScanHistory() {
   const [jobs, setJobs] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [selectedJob, setSelectedJob] = useState(null);
-  const [jobResults, setJobResults] = useState([]);
-  const [resultsLoading, setResultsLoading] = useState(false);
 
   useEffect(() => {
     fetchJobs();
@@ -31,20 +29,6 @@ export default function ScanHistory() {
       setTimeout(fetchJobs, 2000);
     } catch (err) {
       toast.error("Failed to trigger scan");
-    }
-  };
-
-  const handleJobClick = async (job) => {
-    setSelectedJob(job);
-    setResultsLoading(true);
-    try {
-      const data = await getScanJobResults(job.id, false);
-      setJobResults(data.results || []);
-    } catch (err) {
-      toast.error("Failed to load scan results");
-      setJobResults([]);
-    } finally {
-      setResultsLoading(false);
     }
   };
 
@@ -102,7 +86,7 @@ export default function ScanHistory() {
           <tbody className="divide-y divide-slate-700">
             {jobs.map((job) => (
               <tr key={job.id} className="hover:bg-slate-750">
-                <td className="px-4 py-3 text-sm text-cyan-400 hover:text-cyan-300 cursor-pointer" onClick={() => handleJobClick(job)}>#{job.id}</td>
+                <td className="px-4 py-3 text-sm text-cyan-400 hover:text-cyan-300"><Link to={`/dashboard/scans/${job.id}`}>#{job.id}</Link></td>
                 <td className="px-4 py-3 text-sm text-slate-300">{job.job_type}</td>
                 <td className="px-4 py-3">{statusBadge(job.status)}</td>
                 <td className="px-4 py-3 text-sm text-slate-300">
@@ -127,82 +111,6 @@ export default function ScanHistory() {
           </tbody>
         </table>
       </div>
-
-      {/* Job Results Modal */}
-      {selectedJob && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setSelectedJob(null)}>
-          <div className="bg-slate-800 rounded-xl p-6 max-w-4xl w-full mx-4 max-h-[80vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-4">
-              <div>
-                <h2 className="text-xl font-bold text-white">Job #{selectedJob.id}</h2>
-                <p className="text-sm text-slate-400">{selectedJob.job_type} scan</p>
-              </div>
-              <button onClick={() => setSelectedJob(null)} className="text-slate-400 hover:text-white text-2xl">&times;</button>
-            </div>
-
-            {resultsLoading ? (
-              <p className="text-slate-400 text-center py-8">Loading results...</p>
-            ) : (
-              <>
-                <div className="grid grid-cols-3 gap-4 mb-4">
-                  <div className="bg-slate-700 rounded-lg p-3">
-                    <p className="text-xs text-slate-400">Total IPs</p>
-                    <p className="text-2xl font-bold text-white">{selectedJob.total_ips}</p>
-                  </div>
-                  <div className="bg-slate-700 rounded-lg p-3">
-                    <p className="text-xs text-slate-400">Scanned</p>
-                    <p className="text-2xl font-bold text-cyan-400">{selectedJob.scanned_ips}</p>
-                  </div>
-                  <div className="bg-slate-700 rounded-lg p-3">
-                    <p className="text-xs text-slate-400">Blacklisted</p>
-                    <p className="text-2xl font-bold text-rose-400">{selectedJob.blacklisted_ips}</p>
-                  </div>
-                </div>
-
-                <div className="bg-slate-900 rounded-lg overflow-hidden flex-1 overflow-y-auto">
-                  <table className="w-full text-left">
-                    <thead className="bg-slate-700 sticky top-0">
-                      <tr>
-                        <th className="px-4 py-3 text-xs font-medium text-slate-300 uppercase">IP Address</th>
-                        <th className="px-4 py-3 text-xs font-medium text-slate-300 uppercase">Status</th>
-                        <th className="px-4 py-3 text-xs font-medium text-slate-300 uppercase">Providers ({jobResults.filter(r => r.is_blacklisted).length})</th>
-                        <th className="px-4 py-3 text-xs font-medium text-slate-300 uppercase">Checked At</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-700">
-                      {jobResults.map((result) => (
-                        <tr key={result.id} className={result.is_blacklisted ? "bg-rose-900/20" : ""}>
-                          <td className="px-4 py-3 text-sm font-mono text-white">{result.ip_address}</td>
-                          <td className="px-4 py-3">
-                            {result.is_blacklisted ? (
-                              <span className="px-2 py-1 text-xs rounded-full bg-rose-500/20 text-rose-400">Blacklisted</span>
-                            ) : (
-                              <span className="px-2 py-1 text-xs rounded-full bg-emerald-500/20 text-emerald-400">Clean</span>
-                            )}
-                          </td>
-                          <td className="px-4 py-3 text-sm text-slate-300">
-                            {result.is_blacklisted && result.providers_detected ? (
-                              <span className="text-rose-400">({result.providers_detected.length}) {result.providers_detected.map(p => p.provider).join(", ")}</span>
-                            ) : "-"}
-                          </td>
-                          <td className="px-4 py-3 text-sm text-slate-400">
-                            {result.checked_at ? new Date(result.checked_at).toLocaleString() : "-"}
-                          </td>
-                        </tr>
-                      ))}
-                      {jobResults.length === 0 && (
-                        <tr>
-                          <td colSpan={4} className="px-4 py-8 text-center text-slate-400">No results found</td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
