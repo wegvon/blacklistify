@@ -18,6 +18,7 @@ def scan_block_batch(self, job_id: int, ips: list[str], blocks: list[dict], bypa
     try:
         # Use sync DNSBL checker with parallel processing
         results = check_batch_blacklist(ips)
+        logger.info(f"DEBUG: got {len(results)} results, first result: {results[0] if results else 'empty'}")
 
         # Build rows for batch insert
         rows = []
