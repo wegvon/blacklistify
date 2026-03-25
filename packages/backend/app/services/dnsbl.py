@@ -1,8 +1,11 @@
 import ipaddress
+import logging
 import socket
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 from urllib.parse import urlparse
+
+logger = logging.getLogger(__name__)
 
 BASE_PROVIDERS = [
     "all.s5h.net",
@@ -143,3 +146,56 @@ def check_dnsbl_providers(hostname_or_ip: str) -> dict[str, Any]:
         "hostname": hostname_or_ip,
         "categories": ["unknown"] if detected_on else [],
     }
+
+
+def check_ip_blacklist(ip: str, max_workers: int = 50) -> dict[str, Any]:
+    """Check a single IP against all DNSBL providers. Returns same format as check_dnsbl_providers."""
+    reversed_ip = ".".join(reversed(ip.split(".")))
+    listed: set[str] = set()
+    failed_providers: list[str] = []
+
+    def _check_provider(provider: str) -> tuple[str, bool]:
+        query = f"{reversed_ip}.{provider}"
+        try:
+            socket.gethostbyname(query)
+            return provider, True
+        except (socket.gaierror, socket.timeout):
+            return provider, False
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_map = {
+            executor.submit(_check_provider, provider): provider
+            for provider in BASE_PROVIDERS
+        }
+        for future in as_completed(future_map):
+            provider = future_map[future]
+            try:
+                _, is_listed = future.result()
+                if is_listed:
+                    listed.add(provider)
+            except Exception as e:
+                logger.warning("Provider %s failed for %s: %s", provider, ip, e)
+                failed_providers.append(provider)
+
+    detected_on = [
+        {"provider": provider, "categories": ["unknown"], "status": "open"}
+        for provider in BASE_PROVIDERS
+        if provider in listed
+    ]
+
+    return {
+        "ip": ip,
+        "is_blacklisted": bool(detected_on),
+        "providers_detected": detected_on,
+        "providers_total": len(BASE_PROVIDERS) - len(failed_providers),
+        "detected_on": detected_on,
+        "failed_providers": failed_providers,
+    }
+
+
+def check_batch_blacklist(ips: list[str], max_workers: int = 50) -> list[dict[str, Any]]:
+    """Check multiple IPs in parallel against all DNSBL providers."""
+    results = []
+    for ip in ips:
+        results.append(check_ip_blacklist(ip, max_workers))
+    return results

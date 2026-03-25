@@ -1,13 +1,12 @@
 """Block-level scanning task — uses Supabase REST API for all DB ops."""
 
-import asyncio
 import logging
 import time
 from datetime import datetime, timezone
 
 from app.core.celery_app import celery
 from app.db.client import db
-from app.services.cache import RedisCache
+from app.services.dnsbl import check_batch_blacklist
 
 logger = logging.getLogger(__name__)
 
@@ -17,16 +16,8 @@ def scan_block_batch(self, job_id: int, ips: list[str], blocks: list[dict], bypa
     start_time = time.monotonic()
 
     try:
-        from app.services.dnsbl_async import AsyncDNSBLChecker
-
-        cache = None if bypass_cache else RedisCache()
-        checker = AsyncDNSBLChecker(cache=cache)
-
-        loop = asyncio.new_event_loop()
-        try:
-            results = loop.run_until_complete(checker.check_batch(ips))
-        finally:
-            loop.close()
+        # Use sync DNSBL checker (aiodns has issues in Docker)
+        results = check_batch_blacklist(ips)
 
         # Build rows for batch insert
         rows = []
