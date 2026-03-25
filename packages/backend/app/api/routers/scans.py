@@ -53,7 +53,7 @@ def get_scan_job(job_id: int, auth: AuthContext = Depends(require_scope("read"))
 
 
 @router.get("/{job_id}/results")
-def get_scan_job_results(job_id: int, blacklisted_only: bool = Query(False), limit: int = Query(100, le=500), auth: AuthContext = Depends(require_scope("read"))):
+def get_scan_job_results(job_id: int, blacklisted_only: bool = Query(False), limit: int = Query(10000, le=100000), auth: AuthContext = Depends(require_scope("read"))):
     j = db.get_scan_job(job_id)
     if not j:
         raise HTTPException(404, "Scan job not found")
