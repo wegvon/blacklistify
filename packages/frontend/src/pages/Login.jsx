@@ -91,11 +91,6 @@ const Login = () => {
           </button>
 
           {detail ? <p className='text-red-400 text-sm mt-4'>{detail}</p> : null}
-
-          <div className='mt-6 rounded-xl border border-slate-800 bg-slate-800/50 p-3'>
-            <p className='text-xs text-slate-400'>Local default credentials</p>
-            <p className='text-sm text-slate-200 mt-1'><span className='font-semibold'>admin</span> / <span className='font-semibold'>password123</span></p>
-          </div>
         </form>
       </div>
     </div>
