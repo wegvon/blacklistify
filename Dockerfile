@@ -25,7 +25,8 @@ RUN apk add --no-cache \
     build-base \
     libffi-dev \
     libpq-dev \
-    redis
+    redis \
+    c-ares-dev
 
 # Force IPv4 DNS resolution (Supabase db.* only has AAAA records,
 # but Docker containers often lack IPv6 connectivity)
